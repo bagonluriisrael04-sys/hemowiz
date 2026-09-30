@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HemoWiz - Non-Invasive Hemoglobin Monitor</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- =========================================================================
+       Persistent Top Navigation & BLE Status Header
+       ========================================================================= -->
+  <header class="top-navbar">
+    <div class="brand-section">
+      <div class="brand-icon">
+        <!-- Medical Blood Drop + Sensor Wave SVG -->
+        <svg viewBox="0 0 24 24">
+          <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path>
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-title">Hemo<span>Wiz</span></h1>
+        <span class="brand-subtitle">Non-Invasive Optical Hemoglobin Monitor (ESP32 BLE)</span>
+      </div>
+    </div>
+
+    <div class="nav-actions">
+      <!-- Simulator Mode Switch -->
+      <div class="sim-switch-container" title="Toggle Virtual ESP32 Simulator for testing without physical hardware">
+        <span>Simulate ESP32:</span>
+        <label class="switch">
+          <input type="checkbox" id="simToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Cloud Sync Pill -->
+      <div class="cloud-sync-pill" id="cloudSyncPill" title="Click to view cloud database status & setup">
+        <span id="cloudSyncIcon">☁️</span>
+        <span id="cloudSyncText">Cloud Sync</span>
+        <button type="button" class="btn-sync-refresh" id="btnSyncRefresh" title="Sync now with Supabase">↻</button>
+      </div>
+
+      <!-- Persistent BLE Status Pill -->
+      <div class="ble-status-pill" id="bleStatusPill">
+        <div class="ble-status-dot"></div>
+        <span class="ble-status-text" id="bleStatusText">Disconnected</span>
+      </div>
+
+      <!-- Wi-Fi Connect Button -->
+      <button class="btn-wifi-toggle" id="btnWifiModalToggle" title="Connect to ESP32 over Wi-Fi (Works on all browsers: Safari, Firefox, iOS, Android)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+          <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+          <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+          <line x1="12" y1="20" x2="12.01" y2="20"></line>
+        </svg>
+        Wi-Fi Mode
+      </button>
+
+      <!-- BLE Connect / Disconnect Buttons -->
+      <button class="btn-ble-connect" id="btnBleConnect">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"></polyline>
+        </svg>
+        Pair ESP32
+      </button>
+
+      <button class="btn-ble-disconnect" id="btnBleDisconnect" style="display: none;">
+        Disconnect
+      </button>
+    </div>
+  </header>
+
+  <!-- Browser Compatibility Notice Banner (Auto-shown if Web Bluetooth is unavailable) -->
+  <div id="browserCompatBanner" class="browser-compat-banner" style="display: none;">
+    <div class="banner-content">
+      <div class="banner-text">
+        <span>⚠️</span>
+        <span>
+          <strong>Browser Notice:</strong> Direct Web Bluetooth is not supported on this browser (Safari / Firefox / iOS).
+          You can use <strong>Wi-Fi Mode</strong> to connect to your ESP32, test with the <strong>Simulator</strong>, or open in <strong>Google Chrome / Microsoft Edge</strong>.
+        </span>
+      </div>
+      <button type="button" id="btnDismissCompatBanner" class="btn-banner-dismiss" title="Dismiss">&times;</button>
+    </div>
+  </div>
+
+  <!-- Step Tab Navigation -->
+  <nav class="tab-navigation">
+    <button class="nav-tab-btn active" data-tab="tab-intake" id="navTabIntake">
+      <span>1. Patient Intake</span>
+    </button>
+    <button class="nav-tab-btn" data-tab="tab-measurement" id="navTabMeasurement">
+      <span>2. Measurement (R, P, H)</span>
+    </button>
+    <button class="nav-tab-btn" data-tab="tab-history" id="navTabHistory">
+      <span>3. Records &amp; Excel Export</span>
+      <span class="badge-counter" id="recordsCounterBadge">0</span>
+    </button>
+  </nav>
+
+  <!-- =========================================================================
+       Main Content Area
+       ========================================================================= -->
+  <main class="main-wrapper">
+
+    <!-- -----------------------------------------------------------------------
+         STEP 1: PATIENT INTAKE FORM
+         ----------------------------------------------------------------------- -->
+    <section class="view-section active" id="tab-intake">
+      <div class="card-panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+              Patient Demographics &amp; Calibration Data
+            </h2>
+            <p class="panel-subtitle">
+              Collect patient details to tune diagnostic thresholds and optical calibration parameters.
+            </p>
+          </div>
+        </div>
+
+        <form id="patientForm">
+          <div class="form-grid">
+
+            <!-- Patient Name -->
+            <div class="form-group">
+              <label class="form-label" for="patientName">
+                Patient Full Name <span class="required">*</span>
+              </label>
+              <input type="text" id="patientName" class="form-input" placeholder="e.g. Jane Doe" required>
+            </div>
+
+            <!-- Age -->
+            <div class="form-group">
+              <label class="form-label" for="patientAge">
+                Age (Years) <span class="required">*</span>
+              </label>
+              <input type="number" id="patientAge" class="form-input" min="1" max="120" placeholder="e.g. 28" required>
+            </div>
+
+            <!-- Gender -->
+            <div class="form-group">
+              <label class="form-label">
+                Gender <span class="required">*</span>
+              </label>
+              <div class="radio-pill-group">
+                <div class="radio-pill">
+                  <input type="radio" id="genderFemale" name="patientGender" value="Female" checked>
+                  <label for="genderFemale">Female</label>
+                </div>
+                <div class="radio-pill">
+                  <input type="radio" id="genderMale" name="patientGender" value="Male">
+                  <label for="genderMale">Male</label>
+                </div>
+                <div class="radio-pill">
+                  <input type="radio" id="genderOther" name="patientGender" value="Other">
+                  <label for="genderOther">Other</label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Known Anemic Status -->
+            <div class="form-group">
+              <label class="form-label" for="anemicStatus">
+                Known Anemic Status
+              </label>
+              <select id="anemicStatus" class="form-select">
+                <option value="No Prior Diagnosis / Healthy">No Prior Diagnosis / Healthy</option>
+                <option value="Prior Diagnosed Anemic">Prior Diagnosed Anemic</option>
+                <option value="Suspected / Symptomatic (Fatigue/Pallor)">Suspected / Symptomatic (Fatigue/Pallor)</option>
+                <option value="Unknown">Unknown</option>
+              </select>
+            </div>
+
+            <!-- Reference Hb (Ground Truth / Lab Blood Test) -->
+            <div class="form-group">
+              <label class="form-label" for="referenceHb">
+                Reference Hb (Lab / Blood Test)
+                <span style="font-size: 0.75rem; color: var(--secondary-blue); font-weight: 600;">Ground Truth (g/dL)</span>
+              </label>
+              <input type="number" id="referenceHb" class="form-input" min="2.0" max="25.0" step="0.1" placeholder="e.g. 13.8 (Optional / Validation)">
+            </div>
+
+            <!-- Pregnancy Status (Conditional for Female) -->
+            <div class="form-group full-width">
+              <div class="pregnancy-box" id="pregnancyBox">
+                <div class="box-header">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                  </svg>
+                  <span>Pregnancy Status (Clinical Threshold Adjustment)</span>
+                </div>
+                <div class="radio-pill-group">
+                  <div class="radio-pill">
+                    <input type="radio" id="pregNo" name="pregnancyStatus" value="Not Pregnant" checked>
+                    <label for="pregNo">Not Pregnant</label>
+                  </div>
+                  <div class="radio-pill">
+                    <input type="radio" id="preg1st" name="pregnancyStatus" value="1st Trimester">
+                    <label for="preg1st">1st Trimester</label>
+                  </div>
+                  <div class="radio-pill">
+                    <input type="radio" id="preg2nd" name="pregnancyStatus" value="2nd Trimester">
+                    <label for="preg2nd">2nd Trimester</label>
+                  </div>
+                  <div class="radio-pill">
+                    <input type="radio" id="preg3rd" name="pregnancyStatus" value="3rd Trimester">
+                    <label for="preg3rd">3rd Trimester</label>
+                  </div>
+                  <div class="radio-pill">
+                    <input type="radio" id="pregPost" name="pregnancyStatus" value="Postpartum">
+                    <label for="pregPost">Postpartum</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Body Size: Height, Weight & Auto BMI -->
+            <div class="form-group full-width">
+              <label class="form-label">
+                Body Size &amp; BMI Calibration Metadata
+              </label>
+              <div class="body-size-row">
+                <div class="form-group">
+                  <label class="form-label" for="patientHeight">Height (cm)</label>
+                  <input type="number" id="patientHeight" class="form-input" min="50" max="250" placeholder="e.g. 165">
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="patientWeight">Weight (kg)</label>
+                  <input type="number" id="patientWeight" class="form-input" min="20" max="300" step="0.5" placeholder="e.g. 62">
+                </div>
+                <div class="bmi-badge-box">
+                  <span class="bmi-label">Calculated BMI</span>
+                  <div class="bmi-value-display">
+                    <span class="bmi-num" id="bmiNumDisplay">--</span>
+                    <span class="bmi-cat-pill" id="bmiCategoryBadge">Enter Height/Weight</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skin Colour: Fitzpatrick Skin Phototype I - VI -->
+            <div class="form-group full-width">
+              <label class="form-label">
+                Skin Colour - Fitzpatrick Phototype (Optical Transmittance Calibration) <span class="required">*</span>
+              </label>
+              <div class="skin-swatch-grid" id="skinSwatchGrid">
+                <!-- Dynamically populated or rendered -->
+              </div>
+            </div>
+
+          </div>
+
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" id="btnResetForm">
+              Reset Fields
+            </button>
+            <button type="submit" class="btn-primary" id="btnProceedMeasurement">
+              <span>Proceed to Measurement</span>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+
+    <!-- -----------------------------------------------------------------------
+         STEP 2: MEASUREMENT (R, P, H) & TELEMETRY DASHBOARD
+         ----------------------------------------------------------------------- -->
+    <section class="view-section" id="tab-measurement">
+      
+      <!-- Active Patient Summary Banner -->
+      <div class="patient-meta-banner" id="activePatientBanner">
+        <div class="patient-info-left">
+          <div class="patient-avatar" id="avatarInitial">P</div>
+          <div>
+            <div class="patient-name-text" id="bannerPatientName">Jane Doe</div>
+            <div class="patient-meta-chips" id="bannerMetaChips">
+              <span class="meta-chip" id="chipAge">28 yrs</span>
+              <span class="meta-chip" id="chipGender">Female</span>
+              <span class="meta-chip" id="chipPreg">Not Pregnant</span>
+              <span class="meta-chip" id="chipSkin">Type III (Medium)</span>
+              <span class="meta-chip" id="chipBMI">BMI: 22.8</span>
+              <span class="meta-chip" id="chipRefHb" style="display: none; background: #e0f2fe; color: #0369a1; border-color: #7dd3fc; font-weight: 700;">Ref Hb: --</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <button class="btn-secondary" id="btnEditPatient" style="font-size: 0.82rem; padding: 0.4rem 0.85rem;">
+            Edit Patient Info
+          </button>
+        </div>
+      </div>
+
+      <!-- Measurement Acquisition State Box -->
+      <div class="measurement-sensor-state waiting" id="sensorStateBox">
+        <div class="sensor-pulse-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+          </svg>
+        </div>
+        <div class="sensor-state-title" id="sensorStateTitle">
+          Awaiting Optical Sensor Snapshot
+        </div>
+        <p class="sensor-state-desc" id="sensorStateDesc">
+          Ensure the finger is placed steadily on the HemoWiz optical sensor. The ESP32 averages 5 consecutive readings and transmits the snapshot.
+        </p>
+
+        <!-- Optical 5-Sample Progress Indicator -->
+        <div class="sampling-progress-container" id="samplingProgressContainer">
+          <div class="sampling-progress-bar-bg">
+            <div class="sampling-progress-bar-fill" id="samplingProgressBarFill"></div>
+          </div>
+          <div class="sampling-progress-text" id="samplingProgressText">
+            Acquiring optical samples (Sample 1 of 5)...
+          </div>
+        </div>
+      </div>
+
+      <!-- Telemetry Results Cards (R, P, H) -->
+      <div class="telemetry-grid">
+        
+        <!-- Ratio (R) -->
+        <div class="telemetry-card">
+          <div class="telemetry-header">
+            <span class="telemetry-label">Optical Ratio</span>
+            <div class="telemetry-icon-tag blue">R</div>
+          </div>
+          <div class="telemetry-value-wrap">
+            <span class="telemetry-number" id="valRatio">--</span>
+          </div>
+          <div class="telemetry-footer-badge">
+            <span>Dual-Wavelength Ratio</span>
+            <span>R = (AC/DC)λ₁ / (AC/DC)λ₂</span>
+          </div>
+        </div>
+
+        <!-- Perfusion Index (P) -->
+        <div class="telemetry-card">
+          <div class="telemetry-header">
+            <span class="telemetry-label">Perfusion Index</span>
+            <div class="telemetry-icon-tag cyan">P</div>
+          </div>
+          <div class="telemetry-value-wrap">
+            <span class="telemetry-number" id="valPerfusion">--</span>
+            <span class="telemetry-unit">%</span>
+          </div>
+          <div class="telemetry-footer-badge">
+            <span>Signal Strength</span>
+            <span id="piQualityLabel">Signal Quality</span>
+          </div>
+        </div>
+
+        <!-- Hemoglobin Level (H) -->
+        <div class="telemetry-card highlight">
+          <div class="telemetry-header">
+            <span class="telemetry-label">Hemoglobin Level</span>
+            <div class="telemetry-icon-tag red">H</div>
+          </div>
+          <div class="telemetry-value-wrap">
+            <span class="telemetry-number" id="valHemoglobin" style="color: var(--primary-red);">--</span>
+            <span class="telemetry-unit">g/dL</span>
+          </div>
+
+          <!-- Reference Ground-Truth Comparison Box -->
+          <div id="refHbComparisonWrap" style="display: none; margin-bottom: 0.75rem; background: #f0fdf4; border: 1px solid #86efac; border-radius: var(--radius-sm); padding: 0.4rem 0.65rem; font-size: 0.78rem; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <span style="color: #475569;">Lab Ref:</span>
+              <strong id="displayRefHb" style="color: #0f172a;">--</strong> <span style="font-size: 0.7rem; color: #64748b;">g/dL</span>
+            </div>
+            <div>
+              <span style="color: #475569;">Δ Error:</span>
+              <strong id="displayHbDelta" style="font-weight: 800;">--</strong>
+            </div>
+            <div>
+              <span id="displayAccBadge" style="font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: var(--radius-full); background: #bbf7d0; color: #166534;">
+                Matched
+              </span>
+            </div>
+          </div>
+          <div class="telemetry-footer-badge">
+            <span id="hbThresholdRef">WHO Baseline</span>
+            <span id="hbClinicalStatusBadge" class="table-badge" style="background:#e2e8f0; color:#475569;">
+              Pending Reading
+            </span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Clinical Anemia Diagnostic Banner -->
+      <div class="diagnosis-banner" id="diagnosisBanner">
+        <div>
+          <div class="diagnosis-title" id="diagTitle">Awaiting Snapshot Reading</div>
+          <div class="diagnosis-desc" id="diagDesc">
+            Results from the ESP32 will be analyzed against WHO Hemoglobin diagnostic guidelines.
+          </div>
+        </div>
+        <div>
+          <span class="diagnosis-badge-pill" id="diagBadge" style="background: #cbd5e1; color: #1e293b;">
+            NO DATA
+          </span>
+        </div>
+      </div>
+
+      <!-- Controls & Simulation Actions -->
+      <div class="card-panel" style="padding: 1.25rem;">
+        <div class="measurement-controls-row">
+          <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <!-- Trigger Simulator Snapshot Button -->
+            <button class="btn-primary" id="btnTriggerSnapshot" style="background: linear-gradient(135deg, #0284c7 0%, #0052cc 100%);">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polygon points="10 8 16 12 10 16 10 8"></polygon>
+              </svg>
+              <span>Trigger Test Snapshot</span>
+            </button>
+
+            <!-- Simulator Preset Selector -->
+            <select id="simPresetSelect" class="form-select" style="font-size: 0.85rem; padding: 0.5rem 0.8rem; display: none;">
+              <option value="random">Preset: Random Variations</option>
+              <option value="normal">Preset: Normal (14.5 g/dL)</option>
+              <option value="mild">Preset: Mild Anemia (11.5 g/dL)</option>
+              <option value="moderate">Preset: Moderate Anemia (9.4 g/dL)</option>
+              <option value="severe">Preset: Severe Anemia (7.1 g/dL)</option>
+            </select>
+          </div>
+
+          <div style="display: flex; gap: 0.75rem; align-items: center;">
+            <button class="btn-secondary" id="btnNewPatient">
+              New Patient
+            </button>
+            <button class="btn-primary" id="btnSaveSnapshot" style="display: none;">
+              Save &amp; View Records
+            </button>
+            <button class="btn-primary" id="btnViewRecordsDirect">
+              View All Records &rarr;
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+
+    <!-- -----------------------------------------------------------------------
+         STEP 3: RECORDS & EXCEL EXPORT
+         ----------------------------------------------------------------------- -->
+    <section class="view-section" id="tab-history">
+      <div class="card-panel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+              Recorded Sessions &amp; Export
+            </h2>
+            <p class="panel-subtitle">
+              Review stored patient evaluations, calibrate telemetry parameters, and export to Excel (.xlsx).
+            </p>
+          </div>
+
+          <div class="export-btn-group">
+            <button class="btn-excel" id="btnExportExcel">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              Export to Excel (.xlsx)
+            </button>
+            <button class="btn-csv" id="btnExportCSV">
+              Export CSV
+            </button>
+          </div>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="history-stats-bar">
+          <div class="stat-box">
+            <div class="stat-number" id="statTotalTests">0</div>
+            <div class="stat-label">Total Tests</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number" id="statNormalCount" style="color: #059669;">0</div>
+            <div class="stat-label">Normal Hb</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number" id="statAnemicCount" style="color: #dc2626;">0</div>
+            <div class="stat-label">Anemia Detected</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number" id="statAvgHb">--</div>
+            <div class="stat-label">Mean Hb (g/dL)</div>
+          </div>
+        </div>
+
+        <!-- Table Toolbar -->
+        <div class="table-toolbar">
+          <input type="text" id="searchRecordsInput" class="form-input search-input" placeholder="Search patient name, ID, status...">
+          <button class="btn-secondary" id="btnClearAllRecords" style="color: var(--primary-red); border-color: #fca5a5;">
+            Clear All Records
+          </button>
+        </div>
+
+        <!-- Responsive Records Table -->
+        <div class="table-responsive">
+          <table class="records-table" id="recordsTable">
+            <thead>
+              <tr>
+                <th>Date &amp; Time</th>
+                <th>Patient Name</th>
+                <th>Age / Gender</th>
+                <th>Pregnancy</th>
+                <th>Skin Type</th>
+                <th>BMI</th>
+                <th>Ratio (R)</th>
+                <th>PI (P %)</th>
+                <th>Hb (H g/dL)</th>
+                <th>Ref Hb (g/dL)</th>
+                <th>Error (Δ)</th>
+                <th>Diagnostic Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="recordsTableBody">
+              <!-- Dynamically rendered -->
+            </tbody>
+          </table>
+        </div>
+
+        <div id="emptyRecordsState" class="empty-state" style="display: none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="8" y1="12" x2="16" y2="12"></line>
+          </svg>
+          <p>No patient measurements stored yet.</p>
+          <button class="btn-primary" id="btnGoMeasureEmpty" style="margin: 0.75rem auto 0;">
+            Start First Measurement
+          </button>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Wi-Fi Mode Modal -->
+  <div class="modal-overlay" id="wifiModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+            <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+            <line x1="12" y1="20" x2="12.01" y2="20"></line>
+          </svg>
+          <h3>ESP32 Wi-Fi Sync (Cross-Browser)</h3>
+        </div>
+        <button type="button" class="btn-modal-close" id="btnCloseWifiModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-description">
+          Connect your device to the ESP32 network (<strong>HemoWiz-Sensor</strong>) or local clinic network. Compatible with <em>Safari, Firefox, Chrome, Edge, iOS, and Android</em>.
+        </p>
+        
+        <div class="form-group" style="margin-bottom: 1rem;">
+          <label for="wifiEspIp"><strong>ESP32 IP Address:</strong></label>
+          <div style="display: flex; gap: 0.5rem; margin-top: 0.35rem;">
+            <input type="text" id="wifiEspIp" class="form-input" placeholder="192.168.4.1" value="192.168.4.1" style="flex: 1;">
+            <button type="button" class="btn-secondary" id="btnSaveWifiIp">Save IP</button>
+          </div>
+          <small style="color: #64748b; font-size: 0.75rem; margin-top: 0.25rem; display: block;">Default ESP32 SoftAP IP is 192.168.4.1</small>
+        </div>
+
+        <div class="wifi-action-grid">
+          <button type="button" class="btn-secondary" id="btnPingWifi" style="flex: 1;">
+            <span id="pingWifiText">Ping ESP32</span>
+          </button>
+          <button type="button" class="btn-primary" id="btnFetchWifiSnapshot" style="flex: 1;">
+            <span>Fetch Snapshot</span>
+          </button>
+        </div>
+
+        <div class="wifi-status-card" id="wifiStatusCard" style="margin-top: 1rem;">
+          <span class="wifi-status-indicator" id="wifiStatusDot"></span>
+          <span id="wifiStatusMsg">Enter ESP32 IP and click Ping to verify</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Supabase Setup Modal -->
+  <div class="modal-overlay" id="supabaseSetupModal" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span style="font-size: 1.2rem;">☁️</span>
+          <h3>Supabase Cloud Database Setup</h3>
+        </div>
+        <button type="button" class="btn-modal-close" id="btnCloseSupabaseModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size: 0.88rem; color: #334155; line-height: 1.5; margin-bottom: 0.75rem;">
+          To sync live measurements between your clinic computer, phone, and home laptop:
+        </p>
+        <ol style="padding-left: 1.25rem; font-size: 0.82rem; color: #475569; line-height: 1.6; margin-bottom: 0.85rem;">
+          <li>Open your Supabase SQL Editor: <a href="https://supabase.com/dashboard/project/ioqbwaufzczdyrhmgevy/sql" target="_blank" style="color: #0052cc; font-weight: 700; text-decoration: underline;">Open Supabase SQL Editor</a></li>
+          <li>Click <strong>"New query"</strong></li>
+          <li>Copy and paste the SQL script below, then click <strong>"Run"</strong>:</li>
+        </ol>
+        <textarea id="supabaseSqlBox" readonly style="width: 100%; height: 130px; font-family: monospace; font-size: 0.75rem; padding: 0.6rem; border-radius: 6px; border: 1px solid #cbd5e1; background: #f8fafc; resize: none;"></textarea>
+        <div style="margin-top: 0.85rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+          <button type="button" class="btn-secondary" id="btnCopySql">Copy SQL Script</button>
+          <button type="button" class="btn-primary" id="btnCheckTableAgain">Check Connection</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Toast Element -->
+  <div class="toast-notice" id="toastNotice">
+    <span id="toastMessage">Notification message</span>
+  </div>
+
+  <!-- Audio Tone Synthesizer for Measurement Chime -->
+  <script>
+    window.playChime = function(type = 'success') {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        if (type === 'success') {
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+          osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.12); // A5
+          gain.gain.setValueAtTime(0.15, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.35);
+        } else if (type === 'alert') {
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(392.00, ctx.currentTime);
+          osc.frequency.setValueAtTime(329.63, ctx.currentTime + 0.15);
+          gain.gain.setValueAtTime(0.2, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.4);
+        }
+      } catch (e) {
+        // AudioContext not allowed before user gesture
+      }
+    };
+  </script>
+
+  <!-- Scripts -->
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="js/supabase-client.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/ble.js"></script>
+  <script src="js/wifi-sync.js"></script>
+  <script src="js/simulator.js"></script>
+  <script src="js/excel-export.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>
